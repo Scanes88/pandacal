@@ -66,6 +66,9 @@ export async function listGoogleCalendars(
     }));
 }
 
+const GOOGLE_EVENT_FIELDS =
+  "items(id,summary,description,location,start,end),nextPageToken";
+
 export async function listGoogleEvents(
   accessToken: string,
   timeMin: string,
@@ -82,7 +85,8 @@ export async function listGoogleEvents(
           timeMax,
           singleEvents: true,
           orderBy: "startTime",
-          maxResults: 2500,
+          maxResults: 250,
+          fields: GOOGLE_EVENT_FIELDS,
         });
         return (res.data.items ?? []).map((e) => toUnified(e, id, name));
       } catch {

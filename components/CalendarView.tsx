@@ -46,9 +46,16 @@ const VIEW_MAP: Record<CalendarDashView, string> = {
 
 const REFRESH_MS = 15 * 60 * 1000;
 const NAV_DEBOUNCE_MS = 120;
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
-const eventCache = new Map<string, CalendarEvent[]>();
+type CacheEntry = { at: number; events: CalendarEvent[] };
+const eventCache = new Map<string, CacheEntry>();
+const inflight = new Map<string, Promise<CalendarEvent[]>>();
 const abortRegistry = new Map<CalendarSourceKey, AbortController>();
+
+function dateOnly(iso: string): string {
+  return iso.slice(0, 10);
+}
 
 function cacheKey(
   source: CalendarSourceKey,
@@ -56,7 +63,104 @@ function cacheKey(
   start: string,
   end: string,
 ): string {
-  return `${source}|${start}|${end}|${[...ids].sort().join(",")}`;
+  return `${source}|${dateOnly(start)}|${dateOnly(end)}|${[...ids].sort().join(",")}`;
+}
+
+function readCache(key: string): CalendarEvent[] | null {
+  const hit = eventCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CACHE_TTL_MS) {
+    eventCache.delete(key);
+    return null;
+  }
+  return hit.events;
+}
+
+function writeCache(key: string, events: CalendarEvent[]) {
+  eventCache.set(key, { at: Date.now(), events });
+}
+
+function startOfMondayUTC(d: Date): Date {
+  const day = d.getUTCDay();
+  const offset = day === 0 ? -6 : 1 - day;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + offset));
+}
+
+function addDaysUTC(d: Date, n: number): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n));
+}
+
+function adjacentRanges(
+  startStr: string,
+  endStr: string,
+): { prev: [string, string]; next: [string, string] } {
+  const start = new Date(dateOnly(startStr) + "T00:00:00Z");
+  const end = new Date(dateOnly(endStr) + "T00:00:00Z");
+  const days = Math.round((end.getTime() - start.getTime()) / 86400000);
+  if (days >= 28) {
+    const mid = new Date(start.getTime() + (end.getTime() - start.getTime()) / 2);
+    const prevFirst = new Date(Date.UTC(mid.getUTCFullYear(), mid.getUTCMonth() - 1, 1));
+    const nextFirst = new Date(Date.UTC(mid.getUTCFullYear(), mid.getUTCMonth() + 1, 1));
+    const prevStart = startOfMondayUTC(prevFirst);
+    const nextStart = startOfMondayUTC(nextFirst);
+    return {
+      prev: [prevStart.toISOString(), addDaysUTC(prevStart, 42).toISOString()],
+      next: [nextStart.toISOString(), addDaysUTC(nextStart, 42).toISOString()],
+    };
+  }
+  const duration = end.getTime() - start.getTime();
+  const prevStart = new Date(start.getTime() - duration);
+  const nextEnd = new Date(end.getTime() + duration);
+  return {
+    prev: [prevStart.toISOString(), start.toISOString()],
+    next: [end.toISOString(), nextEnd.toISOString()],
+  };
+}
+
+async function fetchRange(
+  source: CalendarSourceKey,
+  ids: string[],
+  startStr: string,
+  endStr: string,
+  signal?: AbortSignal,
+): Promise<CalendarEvent[]> {
+  const key = cacheKey(source, ids, startStr, endStr);
+  const cached = readCache(key);
+  if (cached) return cached;
+  const existing = inflight.get(key);
+  if (existing) return existing;
+  const qs = new URLSearchParams({
+    start: startStr,
+    end: endStr,
+    calendarIds: ids.join(","),
+  });
+  const promise = (async () => {
+    try {
+      const res = await fetch(`/api/${source}/events?${qs.toString()}`, { signal });
+      if (!res.ok) return [];
+      const list = (await res.json()) as CalendarEvent[];
+      writeCache(key, list);
+      return list;
+    } catch {
+      return [];
+    } finally {
+      inflight.delete(key);
+    }
+  })();
+  inflight.set(key, promise);
+  return promise;
+}
+
+function prefetchAdjacent(
+  source: CalendarSourceKey,
+  ids: string[],
+  startStr: string,
+  endStr: string,
+) {
+  if (ids.length === 0) return;
+  const { prev, next } = adjacentRanges(startStr, endStr);
+  void fetchRange(source, ids, prev[0], prev[1]);
+  void fetchRange(source, ids, next[0], next[1]);
 }
 
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -139,8 +243,11 @@ const CalendarView = forwardRef<CalendarViewHandle, Props>(function CalendarView
       if (ids.length === 0) return [];
 
       const key = cacheKey(source, ids, info.startStr, info.endStr);
-      const cached = eventCache.get(key);
-      if (cached) return cached.map(toFCEvent);
+      const cached = readCache(key);
+      if (cached) {
+        prefetchAdjacent(source, ids, info.startStr, info.endStr);
+        return cached.map(toFCEvent);
+      }
 
       abortRegistry.get(source)?.abort();
       const controller = new AbortController();
@@ -148,17 +255,14 @@ const CalendarView = forwardRef<CalendarViewHandle, Props>(function CalendarView
 
       try {
         await abortableSleep(NAV_DEBOUNCE_MS, controller.signal);
-        const qs = new URLSearchParams({
-          start: info.startStr,
-          end: info.endStr,
-          calendarIds: ids.join(","),
-        });
-        const res = await fetch(`/api/${source}/events?${qs.toString()}`, {
-          signal: controller.signal,
-        });
-        if (!res.ok) return [];
-        const list = (await res.json()) as CalendarEvent[];
-        eventCache.set(key, list);
+        const list = await fetchRange(
+          source,
+          ids,
+          info.startStr,
+          info.endStr,
+          controller.signal,
+        );
+        prefetchAdjacent(source, ids, info.startStr, info.endStr);
         return list.map(toFCEvent);
       } catch {
         return [];

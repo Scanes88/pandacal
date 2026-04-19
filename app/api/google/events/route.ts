@@ -4,10 +4,10 @@ import { authOptions } from "@/lib/auth-options";
 import {
   createGoogleEvent,
   deleteGoogleEvent,
-  listGoogleCalendars,
   listGoogleEvents,
   updateGoogleEvent,
 } from "@/lib/google-calendar";
+import { getGoogleCalendarsCached } from "@/lib/calendar-list-cache";
 import type { EventInput, SubCalendar } from "@/types/calendar";
 
 async function getAccessToken(): Promise<string | null> {
@@ -28,7 +28,7 @@ async function resolveCalendar(
   accessToken: string,
   calendarId: string | null,
 ): Promise<SubCalendar | null> {
-  const list = await listGoogleCalendars(accessToken);
+  const list = await getGoogleCalendarsCached(accessToken);
   if (calendarId) return list.find((c) => c.id === calendarId) ?? null;
   return list.find((c) => c.primary) ?? list[0] ?? null;
 }
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const all = await listGoogleCalendars(accessToken);
+  const all = await getGoogleCalendarsCached(accessToken);
   const idsParam = url.searchParams.get("calendarIds");
   const ids = idsParam ? new Set(idsParam.split(",").filter(Boolean)) : null;
   const chosen = ids ? all.filter((c) => ids.has(c.id)) : all;

@@ -204,7 +204,8 @@ export default function Dashboard() {
   );
 }
 
-const miniEventCache = new Map<string, CalendarEvent[]>();
+const MINI_CACHE_TTL_MS = 5 * 60 * 1000;
+const miniEventCache = new Map<string, { at: number; events: CalendarEvent[] }>();
 
 async function fetchMiniEvents(
   source: CalendarSourceKey,
@@ -213,9 +214,9 @@ async function fetchMiniEvents(
   calendarIds: string[],
   signal: AbortSignal,
 ): Promise<CalendarEvent[]> {
-  const key = `${source}|${start}|${end}|${[...calendarIds].sort().join(",")}`;
-  const cached = miniEventCache.get(key);
-  if (cached) return cached;
+  const key = `${source}|${start.slice(0, 10)}|${end.slice(0, 10)}|${[...calendarIds].sort().join(",")}`;
+  const hit = miniEventCache.get(key);
+  if (hit && Date.now() - hit.at <= MINI_CACHE_TTL_MS) return hit.events;
   try {
     const qs = new URLSearchParams({
       start,
@@ -225,7 +226,7 @@ async function fetchMiniEvents(
     const res = await fetch(`/api/${source}/events?${qs.toString()}`, { signal });
     if (!res.ok) return [];
     const list = (await res.json()) as CalendarEvent[];
-    miniEventCache.set(key, list);
+    miniEventCache.set(key, { at: Date.now(), events: list });
     return list;
   } catch {
     return [];

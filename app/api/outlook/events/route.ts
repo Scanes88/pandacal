@@ -4,10 +4,10 @@ import { authOptions } from "@/lib/auth-options";
 import {
   createOutlookEvent,
   deleteOutlookEvent,
-  listOutlookCalendars,
   listOutlookEvents,
   updateOutlookEvent,
 } from "@/lib/outlook-calendar";
+import { getOutlookCalendarsCached } from "@/lib/calendar-list-cache";
 import type { EventInput, SubCalendar } from "@/types/calendar";
 
 async function getAccessToken(): Promise<string | null> {
@@ -28,7 +28,7 @@ async function resolveCalendar(
   accessToken: string,
   calendarId: string | null,
 ): Promise<SubCalendar | null> {
-  const list = await listOutlookCalendars(accessToken);
+  const list = await getOutlookCalendarsCached(accessToken);
   if (calendarId) return list.find((c) => c.id === calendarId) ?? null;
   return list.find((c) => c.primary) ?? list[0] ?? null;
 }
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const all = await listOutlookCalendars(accessToken);
+  const all = await getOutlookCalendarsCached(accessToken);
   const idsParam = url.searchParams.get("calendarIds");
   const ids = idsParam ? new Set(idsParam.split(",").filter(Boolean)) : null;
   const chosen = ids ? all.filter((c) => ids.has(c.id)) : all;

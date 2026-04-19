@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth-options";
-import { listOutlookCalendars } from "@/lib/outlook-calendar";
+import { getOutlookCalendarsCached } from "@/lib/calendar-list-cache";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -12,6 +12,6 @@ export async function GET() {
       { status: 401 },
     );
   }
-  const calendars = await listOutlookCalendars(tokens.accessToken);
+  const calendars = await getOutlookCalendarsCached(tokens.accessToken);
   return NextResponse.json(calendars);
 }
