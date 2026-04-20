@@ -116,7 +116,8 @@ export const authOptions: NextAuthOptions = {
       authorization: { params: { scope: MICROSOFT_SCOPES } },
     }),
   ],
-  session: { strategy: "jwt" },
+  session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
+  jwt: { maxAge: 30 * 24 * 60 * 60 },
   pages: { signIn: "/signin" },
   callbacks: {
     async jwt({ token, account }) {

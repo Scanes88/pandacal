@@ -5,7 +5,10 @@
       "Bash(echo \"EXIT=$?\")",
       "Bash(npm run *)",
       "Bash(echo \"exit=$?\")",
-      "Bash(npx next *)"
+      "Bash(npx next *)",
+      "Bash(sips --version)",
+      "Bash(python3 *)",
+      "Bash(git add *)"
     ]
   }
 }

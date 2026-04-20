@@ -13,24 +13,22 @@ import CalendarView, {
 import EventModal, { type ModalState } from "@/components/EventModal";
 import { visibilityKey } from "@/components/CalendarSourceList";
 import { ymd } from "@/components/MiniCalendar";
-import type {
-  CalendarEvent,
-  CalendarSourceKey,
-  SubCalendar,
-} from "@/types/calendar";
+import { useEventStore } from "@/lib/use-event-store";
+import type { CalendarEvent, SubCalendar } from "@/types/calendar";
 
 export default function Dashboard() {
   const { data: session, status } = useSession();
   const calRef = useRef<CalendarViewHandle>(null);
   const [view, setView] = useState<CalendarDashView>("week");
   const [calendars, setCalendars] = useState<SubCalendar[]>([]);
+  const [calendarsLoaded, setCalendarsLoaded] = useState(false);
   const [visibleCalendars, setVisibleCalendars] = useState<Record<string, boolean>>({});
   const [modal, setModal] = useState<ModalState | null>(null);
   const [title, setTitle] = useState("");
   const [today] = useState<Date>(() => new Date());
   const [miniMonth, setMiniMonth] = useState<Date>(() => startOfMonth(new Date()));
   const [activeRange, setActiveRange] = useState<ActiveRange | null>(null);
-  const [miniEventDates, setMiniEventDates] = useState<Set<string>>(new Set());
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const googleConnected = !!session?.google?.accessToken && !session.google.error;
   const outlookConnected =
@@ -52,6 +50,7 @@ export default function Dashboard() {
       } catch {}
     }
     setCalendars(next);
+    setCalendarsLoaded(true);
     setVisibleCalendars((prev) => {
       const out: Record<string, boolean> = {};
       for (const c of next) {
@@ -66,64 +65,45 @@ export default function Dashboard() {
     if (anyConnected) loadCalendars();
   }, [anyConnected, loadCalendars]);
 
-  const visibleIdsBySource = useMemo(() => {
-    const map: Record<CalendarSourceKey, string[]> = { google: [], outlook: [] };
-    for (const c of calendars) {
-      const key = visibilityKey(c.source, c.id);
-      if (visibleCalendars[key]) map[c.source].push(c.id);
-    }
-    return map;
-  }, [calendars, visibleCalendars]);
-
-  useEffect(() => {
-    if (!anyConnected) return;
-    const ac = new AbortController();
-    const gridStart = startOfMondayWeek(
-      new Date(miniMonth.getFullYear(), miniMonth.getMonth(), 1),
-    );
-    const gridEnd = addDays(gridStart, 42);
-    const start = gridStart.toISOString();
-    const end = gridEnd.toISOString();
-
-    const fetches: Promise<CalendarEvent[]>[] = [];
-    if (googleConnected && visibleIdsBySource.google.length > 0) {
-      fetches.push(
-        fetchMiniEvents("google", start, end, visibleIdsBySource.google, ac.signal),
-      );
-    }
-    if (outlookConnected && visibleIdsBySource.outlook.length > 0) {
-      fetches.push(
-        fetchMiniEvents("outlook", start, end, visibleIdsBySource.outlook, ac.signal),
-      );
-    }
-    Promise.all(fetches)
-      .then((lists) => {
-        const set = new Set<string>();
-        for (const list of lists) {
-          for (const e of list) markRange(set, e);
-        }
-        setMiniEventDates(set);
-      })
-      .catch(() => {});
-    return () => ac.abort();
-  }, [
-    anyConnected,
+  const { events, loading: eventsLoading, ensureRange, refresh } = useEventStore({
+    calendars,
     googleConnected,
     outlookConnected,
-    miniMonth,
-    visibleIdsBySource,
-  ]);
+  });
+
+  const visibleEvents = useMemo(() => {
+    return events.filter(
+      (e) => visibleCalendars[visibilityKey(e.source, e.calendarId)] ?? true,
+    );
+  }, [events, visibleCalendars]);
+
+  const miniEventDates = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of visibleEvents) markRange(set, e);
+    return set;
+  }, [visibleEvents]);
+
+  const handleRangeChange = useCallback(
+    (range: ActiveRange) => {
+      setActiveRange(range);
+      ensureRange(range.start, range.end);
+    },
+    [ensureRange],
+  );
 
   if (status === "loading") {
-    return (
-      <main className="flex h-screen items-center justify-center bg-white text-sm text-slate-500">
-        Loading…
-      </main>
-    );
+    return <SplashScreen message="Loading…" />;
   }
 
   if (!anyConnected) {
     return <ConnectScreen />;
+  }
+
+  const showInitialLoading =
+    anyConnected && (!calendarsLoaded || (calendars.length > 0 && eventsLoading));
+
+  if (showInitialLoading) {
+    return <SplashScreen message="Loading your calendars…" spinner />;
   }
 
   const handleViewChange = (v: CalendarDashView) => {
@@ -139,6 +119,7 @@ export default function Dashboard() {
 
   const handleMiniSelect = (date: Date) => {
     calRef.current?.gotoDate(date);
+    setSidebarOpen(false);
   };
 
   const handleToggleCalendar = (key: string) =>
@@ -153,6 +134,7 @@ export default function Dashboard() {
         onPrev={() => calRef.current?.prev()}
         onNext={() => calRef.current?.next()}
         title={title}
+        onToggleSidebar={() => setSidebarOpen((s) => !s)}
       />
       {(!googleConnected || !outlookConnected) && (
         <ConnectBanner
@@ -172,10 +154,13 @@ export default function Dashboard() {
           calendars={calendars}
           visible={visibleCalendars}
           onToggleCalendar={handleToggleCalendar}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
         <CalendarView
           ref={calRef}
           view={view}
+          events={events}
           visibleCalendars={visibleCalendars}
           sourceConnected={{
             google: googleConnected,
@@ -184,7 +169,7 @@ export default function Dashboard() {
           onCreate={handleCreate}
           onEdit={handleEdit}
           onTitleChange={setTitle}
-          onRangeChange={setActiveRange}
+          onRangeChange={handleRangeChange}
         />
       </div>
       {modal && (
@@ -194,9 +179,7 @@ export default function Dashboard() {
           onClose={() => setModal(null)}
           onSaved={() => {
             setModal(null);
-            miniEventCache.clear();
-            setMiniMonth((m) => new Date(m));
-            calRef.current?.refetch();
+            refresh();
           }}
         />
       )}
@@ -204,44 +187,8 @@ export default function Dashboard() {
   );
 }
 
-const MINI_CACHE_TTL_MS = 5 * 60 * 1000;
-const miniEventCache = new Map<string, { at: number; events: CalendarEvent[] }>();
-
-async function fetchMiniEvents(
-  source: CalendarSourceKey,
-  start: string,
-  end: string,
-  calendarIds: string[],
-  signal: AbortSignal,
-): Promise<CalendarEvent[]> {
-  const key = `${source}|${start.slice(0, 10)}|${end.slice(0, 10)}|${[...calendarIds].sort().join(",")}`;
-  const hit = miniEventCache.get(key);
-  if (hit && Date.now() - hit.at <= MINI_CACHE_TTL_MS) return hit.events;
-  try {
-    const qs = new URLSearchParams({
-      start,
-      end,
-      calendarIds: calendarIds.join(","),
-    });
-    const res = await fetch(`/api/${source}/events?${qs.toString()}`, { signal });
-    if (!res.ok) return [];
-    const list = (await res.json()) as CalendarEvent[];
-    miniEventCache.set(key, { at: Date.now(), events: list });
-    return list;
-  } catch {
-    return [];
-  }
-}
-
 function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function startOfMondayWeek(date: Date): Date {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const day = d.getDay();
-  const offset = day === 0 ? -6 : 1 - day;
-  return addDays(d, offset);
 }
 
 function addDays(date: Date, n: number): Date {
@@ -264,6 +211,49 @@ function markRange(set: Set<string>, e: CalendarEvent) {
     set.add(ymd(cursor));
     cursor = addDays(cursor, 1);
   }
+}
+
+function SplashScreen({
+  message,
+  spinner = false,
+}: {
+  message: string;
+  spinner?: boolean;
+}) {
+  return (
+    <main className="flex h-screen items-center justify-center bg-white">
+      <div className="flex items-center gap-3 text-sm text-slate-600">
+        {spinner && <Spinner />}
+        <span>{message}</span>
+      </div>
+    </main>
+  );
+}
+
+function Spinner() {
+  return (
+    <svg
+      className="h-4 w-4 animate-spin text-slate-500"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+    >
+      <circle
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeOpacity="0.25"
+        strokeWidth="3"
+      />
+      <path
+        d="M22 12a10 10 0 0 1-10 10"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 function ConnectScreen() {
