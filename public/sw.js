@@ -1,10 +1,10 @@
-const CACHE_VERSION = "pandacal-shell-v1";
+const CACHE_VERSION = "pandacal-shell-v2";
 const SHELL_ASSETS = [
   "/",
   "/manifest.json",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/apple-touch-icon.png",
+  "/icon-192x192.png",
+  "/icon-512x512.png",
+  "/apple-touch-icon.png",
 ];
 
 self.addEventListener("install", (event) => {

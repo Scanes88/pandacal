@@ -1,0 +1,99 @@
+import sharp from "sharp";
+import { writeFile, mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const publicDir = resolve(__dirname, "..", "public");
+
+// 512x512 master SVG. Designed with a safe zone well inside the frame so
+// iOS/Android home-screen masking (which typically crops ~10% per side) does
+// not clip the panda or the calendar badge.
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F1F5F9"/>
+    </radialGradient>
+    <clipPath id="round">
+      <rect x="0" y="0" width="512" height="512" rx="112" ry="112"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#round)">
+    <rect x="0" y="0" width="512" height="512" fill="url(#bg)"/>
+
+    <!-- Ears -->
+    <circle cx="138" cy="138" r="52" fill="#0F172A"/>
+    <circle cx="374" cy="138" r="52" fill="#0F172A"/>
+    <circle cx="138" cy="138" r="24" fill="#1E293B"/>
+    <circle cx="374" cy="138" r="24" fill="#1E293B"/>
+
+    <!-- Head -->
+    <circle cx="256" cy="244" r="158" fill="#FFFFFF" stroke="#0F172A" stroke-width="6"/>
+
+    <!-- Eye patches -->
+    <ellipse cx="202" cy="236" rx="38" ry="48" fill="#0F172A" transform="rotate(-18 202 236)"/>
+    <ellipse cx="310" cy="236" rx="38" ry="48" fill="#0F172A" transform="rotate(18 310 236)"/>
+
+    <!-- Eye whites -->
+    <circle cx="208" cy="240" r="14" fill="#FFFFFF"/>
+    <circle cx="304" cy="240" r="14" fill="#FFFFFF"/>
+
+    <!-- Pupils -->
+    <circle cx="211" cy="242" r="7" fill="#0F172A"/>
+    <circle cx="301" cy="242" r="7" fill="#0F172A"/>
+    <circle cx="213" cy="240" r="2.2" fill="#FFFFFF"/>
+    <circle cx="303" cy="240" r="2.2" fill="#FFFFFF"/>
+
+    <!-- Nose -->
+    <path d="M256 288 q-14 0 -16 -10 q-1 -8 7 -10 q9 -2 9 6 q0 -8 9 -6 q8 2 7 10 q-2 10 -16 10 Z" fill="#0F172A"/>
+
+    <!-- Mouth -->
+    <path d="M256 298 v10" stroke="#0F172A" stroke-width="4" stroke-linecap="round" fill="none"/>
+    <path d="M256 308 q-10 12 -22 6" stroke="#0F172A" stroke-width="4" stroke-linecap="round" fill="none"/>
+    <path d="M256 308 q10 12 22 6" stroke="#0F172A" stroke-width="4" stroke-linecap="round" fill="none"/>
+
+    <!-- Calendar badge (bottom-right, slightly overlapping head) -->
+    <g transform="translate(332 332)">
+      <!-- subtle drop shadow -->
+      <rect x="2" y="6" width="128" height="128" rx="22" ry="22" fill="#0F172A" opacity="0.12"/>
+      <!-- body -->
+      <rect x="0" y="0" width="128" height="128" rx="22" ry="22" fill="#FFFFFF" stroke="#0F172A" stroke-width="4"/>
+      <!-- orange header -->
+      <path d="M4 22 a18 18 0 0 1 18 -18 h84 a18 18 0 0 1 18 18 v16 h-120 Z" fill="#F97316"/>
+      <!-- binding rings -->
+      <rect x="30" y="-6" width="10" height="26" rx="4" fill="#0F172A"/>
+      <rect x="88" y="-6" width="10" height="26" rx="4" fill="#0F172A"/>
+      <!-- day number -->
+      <text x="64" y="98" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="56" font-weight="800" fill="#3B82F6">20</text>
+    </g>
+  </g>
+</svg>`;
+
+async function main() {
+  await mkdir(publicDir, { recursive: true });
+
+  // Save the master SVG for reference / future edits.
+  await writeFile(resolve(publicDir, "icon.svg"), svg);
+
+  const targets = [
+    { name: "icon-192x192.png", size: 192 },
+    { name: "icon-512x512.png", size: 512 },
+    { name: "apple-touch-icon.png", size: 180 },
+  ];
+
+  for (const { name, size } of targets) {
+    const out = resolve(publicDir, name);
+    await sharp(Buffer.from(svg), { density: 384 })
+      .resize(size, size, { fit: "contain", background: { r: 255, g: 255, b: 255, alpha: 1 } })
+      .png({ compressionLevel: 9 })
+      .toFile(out);
+    console.log(`wrote ${out}`);
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
